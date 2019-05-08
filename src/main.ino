@@ -25,16 +25,16 @@
    Be sure to install it!
  ****************************************************/
 
-// Screen dimensions
-#define SCREEN_WIDTH  128
-#define SCREEN_HEIGHT 128 // Change this to 96 for 1.27" OLED.
-
-// You can use any (4 or) 5 pins
 #define SCLK_PIN 13
 #define MOSI_PIN 11
 #define DC_PIN   8
 #define CS_PIN   10
 #define RST_PIN  9
+#define MENU_PIN 4
+#define UP_PIN A0
+#define DOWN_PIN 5
+#define SEL_PIN 7
+#define PIN_INT 1 //From RTC
 
 // Color definitions
 #define BLACK           0x0000
@@ -46,9 +46,16 @@
 #define YELLOW          0xFFE0
 #define WHITE           0xFFFF
 
+#include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1351.h>
 #include <SPI.h>
+//#include <RTCC_MCP7940N.h>
+#include <MCP7940.h>
+#include <max1720x.h>
+//#include <EnableInterrupt.h>
+#include "PinChangeInterrupt.h"
+//#include "custom.h"
 
 // Option 1: use any pins but a little slower
 //Adafruit_SSD1351 tft = Adafruit_SSD1351(SCREEN_WIDTH, SCREEN_HEIGHT, CS_PIN, DC_PIN, MOSI_PIN, SCLK_PIN, RST_PIN);
@@ -57,219 +64,405 @@
 // (for UNO thats sclk = 13 and sid = 11) and pin 10 must be
 // an output. This is much faster - also required if you want
 // to use the microSD card (see the image drawing example)
-Adafruit_SSD1351 tft = Adafruit_SSD1351(SCREEN_WIDTH, SCREEN_HEIGHT, &SPI,
-  CS_PIN, DC_PIN, RST_PIN);
+//Adafruit_SSD1351 tft = Adafruit_SSD1351(SCREEN_WIDTH, SCREEN_HEIGHT, &SPI,
+//  CS_PIN, DC_PIN, RST_PIN);
+Adafruit_SSD1351 tft = Adafruit_SSD1351(CS_PIN, DC_PIN, RST_PIN);
 
-float p = 3.1415926;
+//const uint8_t  MCP7940_MEMORY_SIZE = 64; ///< Number of bytes in memory
 
-void setup(void) {
-        Serial.begin(9600);
-        Serial.print("hello!");
-        tft.begin();
+//RTCC_MCP7940N rtc;
+MCP7940_Class MCP7940;
+const uint8_t SPRINTF_BUFFER_SIZE = 32;
+char timeBuff[SPRINTF_BUFFER_SIZE]; // Buffer for sprintf()/sscanf()
+max1720x gauge;
+//#define TRG 120
+//char batt[7];
+//Display
+enum DisplayModes {SHOW_MAIN, SHOW_MENU, TEMP_MENU, SET_UP_TEMP, SET_DOWN_TEMP, TIMER_MENU, SETTINGS_MENU};
+DisplayModes displayMode = SHOW_MAIN;
+enum UpDown: byte {UP, DOWN};
+UpDown upDown;
+uint8_t menuLevel;
+uint8_t highlighted = 0;
+uint8_t upTemp = 78;
+uint8_t downTemp = 30;
 
-        Serial.println("init");
+volatile bool itr = false;
+//int buttonState = 0;
 
-        // You can optionally rotate the display by running the line below.
-        // Note that a value of 0 means no rotation, 1 means 90 clockwise,
-        // 2 means 180 degrees clockwise, and 3 means 270 degrees clockwise.
-        //tft.setRotation(1);
-        // NOTE: The test pattern at the start will NOT be rotated!  The code
-        // for rendering the test pattern talks directly to the display and
-        // ignores any rotation.
-        
-
-}
-
-void loop() {
-
-}
-
-void testlines(uint16_t color) {
-        tft.fillScreen(BLACK);
-        for (uint16_t x=0; x < tft.width()-1; x+=6) {
-                tft.drawLine(0, 0, x, tft.height()-1, color);
-        }
-        for (uint16_t y=0; y < tft.height()-1; y+=6) {
-                tft.drawLine(0, 0, tft.width()-1, y, color);
-        }
-
-        tft.fillScreen(BLACK);
-        for (uint16_t x=0; x < tft.width()-1; x+=6) {
-                tft.drawLine(tft.width()-1, 0, x, tft.height()-1, color);
-        }
-        for (uint16_t y=0; y < tft.height()-1; y+=6) {
-                tft.drawLine(tft.width()-1, 0, 0, y, color);
-        }
-
-        tft.fillScreen(BLACK);
-        for (uint16_t x=0; x < tft.width()-1; x+=6) {
-                tft.drawLine(0, tft.height()-1, x, 0, color);
-        }
-        for (uint16_t y=0; y < tft.height()-1; y+=6) {
-                tft.drawLine(0, tft.height()-1, tft.width()-1, y, color);
-        }
-
-        tft.fillScreen(BLACK);
-        for (uint16_t x=0; x < tft.width()-1; x+=6) {
-                tft.drawLine(tft.width()-1, tft.height()-1, x, 0, color);
-        }
-        for (uint16_t y=0; y < tft.height()-1; y+=6) {
-                tft.drawLine(tft.width()-1, tft.height()-1, 0, y, color);
-        }
-
-}
-
-void testdrawtext(char *text, uint16_t color) {
-        tft.setCursor(0,0);
-        tft.setTextColor(color);
-        tft.print(text);
-}
-
-void testfastlines(uint16_t color1, uint16_t color2) {
-        tft.fillScreen(BLACK);
-        for (uint16_t y=0; y < tft.height()-1; y+=5) {
-                tft.drawFastHLine(0, y, tft.width()-1, color1);
-        }
-        for (uint16_t x=0; x < tft.width()-1; x+=5) {
-                tft.drawFastVLine(x, 0, tft.height()-1, color2);
-        }
-}
-
-void testdrawrects(uint16_t color) {
-        tft.fillScreen(BLACK);
-        for (uint16_t x=0; x < tft.height()-1; x+=6) {
-                tft.drawRect((tft.width()-1)/2 -x/2, (tft.height()-1)/2 -x/2, x, x, color);
-        }
-}
-
-void testfillrects(uint16_t color1, uint16_t color2) {
-        tft.fillScreen(BLACK);
-        for (uint16_t x=tft.height()-1; x > 6; x-=6) {
-                tft.fillRect((tft.width()-1)/2 -x/2, (tft.height()-1)/2 -x/2, x, x, color1);
-                tft.drawRect((tft.width()-1)/2 -x/2, (tft.height()-1)/2 -x/2, x, x, color2);
-        }
-}
-
-void testfillcircles(uint8_t radius, uint16_t color) {
-        for (uint8_t x=radius; x < tft.width()-1; x+=radius*2) {
-                for (uint8_t y=radius; y < tft.height()-1; y+=radius*2) {
-                        tft.fillCircle(x, y, radius, color);
-                }
-        }
-}
-
-void testdrawcircles(uint8_t radius, uint16_t color) {
-        for (uint8_t x=0; x < tft.width()-1+radius; x+=radius*2) {
-                for (uint8_t y=0; y < tft.height()-1+radius; y+=radius*2) {
-                        tft.drawCircle(x, y, radius, color);
-                }
-        }
-}
-
-void testtriangles() {
-        tft.fillScreen(BLACK);
-        int color = 0xF800;
-        int t;
-        int w = tft.width()/2;
-        int x = tft.height();
-        int y = 0;
-        int z = tft.width();
-        for(t = 0; t <= 15; t+=1) {
-                tft.drawTriangle(w, y, y, x, z, x, color);
-                x-=4;
-                y+=4;
-                z-=4;
-                color+=100;
-        }
-}
-
-void testroundrects() {
-        tft.fillScreen(BLACK);
-        int color = 100;
-
-        int x = 0;
-        int y = 0;
-        int w = tft.width();
-        int h = tft.height();
-        for(int i = 0; i <= 24; i++) {
-                tft.drawRoundRect(x, y, w, h, 5, color);
-                x+=2;
-                y+=3;
-                w-=4;
-                h-=6;
-                color+=1100;
-                Serial.println(i);
-        }
-}
-
-void tftPrintTest() {
-        tft.fillScreen(BLACK);
-        tft.setCursor(0, 5);
-        tft.setTextColor(RED);
-        tft.setTextSize(1);
-        tft.println("Hello World!");
-        tft.setTextColor(YELLOW);
-        tft.setTextSize(2);
-        tft.println("Hello World!");
-        tft.setTextColor(BLUE);
-        tft.setTextSize(3);
-        tft.print(1234.567);
-        delay(1500);
-        tft.setCursor(0, 5);
-        tft.fillScreen(BLACK);
-        tft.setTextColor(WHITE);
-        tft.setTextSize(0);
-        tft.println("Hello World!");
-        tft.setTextSize(1);
-        tft.setTextColor(GREEN);
-        tft.print(p, 6);
-        tft.println(" Want pi?");
-        tft.println(" ");
-        tft.print(8675309, HEX); // print 8,675,309 out in HEX!
-        tft.println(" Print HEX!");
-        tft.println(" ");
-        tft.setTextColor(WHITE);
-        tft.println("Sketch has been");
-        tft.println("running for: ");
-        tft.setTextColor(MAGENTA);
-        tft.print(millis() / 1000);
-        tft.setTextColor(WHITE);
-        tft.print(" seconds.");
-}
-
-void mediabuttons() {
-        // play
-        tft.fillScreen(BLACK);
-        tft.fillRoundRect(25, 10, 78, 60, 8, WHITE);
-        tft.fillTriangle(42, 20, 42, 60, 90, 40, RED);
-        delay(500);
-        // pause
-        tft.fillRoundRect(25, 90, 78, 60, 8, WHITE);
-        tft.fillRoundRect(39, 98, 20, 45, 5, GREEN);
-        tft.fillRoundRect(69, 98, 20, 45, 5, GREEN);
-        delay(500);
-        // play color
-        tft.fillTriangle(42, 20, 42, 60, 90, 40, BLUE);
-        delay(50);
-        // pause color
-        tft.fillRoundRect(39, 98, 20, 45, 5, RED);
-        tft.fillRoundRect(69, 98, 20, 45, 5, RED);
-        // play color
-        tft.fillTriangle(42, 20, 42, 60, 90, 40, GREEN);
-}
-
-/**************************************************************************/
-/*!
-    @brief  Renders a simple test pattern on the screen
- */
-/**************************************************************************/
-void lcdTestPattern(void)
+void alarmint()
 {
-        static const uint16_t PROGMEM colors[] =
-        { RED, YELLOW, GREEN, CYAN, BLUE, MAGENTA, BLACK, WHITE };
+	// Just set flag so main "thread" can act on it
+	itr = true;
+}
 
-        for(uint8_t c=0; c<8; c++) {
-                tft.fillRect(0, tft.height() * c / 8, tft.width(), tft.height() / 8,
-                             pgm_read_word(&colors[c]));
-        }
+static uint8_t sec;
+static uint8_t min;
+static uint8_t hr;
+
+void setup()
+{
+  pinMode(MENU_PIN, INPUT_PULLUP);
+	pinMode(UP_PIN, INPUT_PULLUP);
+	pinMode(DOWN_PIN, INPUT_PULLUP);
+	pinMode(SEL_PIN, INPUT_PULLUP);
+  //attachPCINT(DOWN_PIN, testDown, IS_FALLING);
+  Wire.begin();
+  tft.begin();
+  // You can optionally rotate the display by running the line below.
+  // Note that a value of 0 means no rotation, 1 means 90 clockwise,
+  // 2 means 180 degrees clockwise, and 3 means 270 degrees clockwise.
+  //tft.setRotation(2);
+  tft.setCursor(30, 50);
+  tft.setTextColor(CYAN);
+  tft.print("Bollox");
+
+  gauge.reset(); // Resets MAX1720x
+  //Serial.println("gauge");
+	// RTC
+	while (!MCP7940.begin())
+		{ // Initialize RTC communications    //
+			tft.fillScreen(BLACK);
+			tft.setCursor(0, 0);
+			tft.println(F("Unable to find MCP7940M"));
+			delay(2000);
+	 	}
+ while (!MCP7940.deviceStatus()) // Turn oscillator on if necessary
+  {
+		tft.fillScreen(BLACK);
+		tft.setCursor(0, 0);
+    tft.println(F("Oscillator is off, turning it on."));
+    bool deviceStatus = MCP7940.deviceStart(); // Start oscillator and return state
+    if (!deviceStatus) // If it didn't start
+    {
+			tft.fillScreen(BLACK);
+	  	tft.setCursor(0, 0);
+      tft.println(F("Oscillator did not start, trying again."));
+      delay(1000);
+    }
+  }
+  tft.fillScreen(BLACK);
+  tft.setCursor(0, 0);
+  tft.setTextSize(2);
+	// Enable interrupt
+	pinMode( PIN_INT, INPUT_PULLUP );
+  //attachInterrupt( digitalPinToInterrupt(PIN_INT), alarmint, RISING );
+	//enableInterrupt( PIN_INT, alarmint, CHANGE );
+  //attachPinChangeInterrupt(PIN_INT, alarm, RISING);
+  attachPCINT(17, alarmint, CHANGE); //n.b. Serial must not be used with TX pin
+}
+
+///////////////////////////////////////////////////////////////////////////////
+void loop()
+  {
+		if (digitalRead(MENU_PIN) == HIGH)
+			{
+				tft.quickFill(BLACK);
+				setDisplayMode();
+			}
+
+		if (displayMode == SHOW_MAIN)
+			{
+				drawTime();
+				showMode();	// should be 0
+			}
+
+		else if (displayMode == SHOW_MENU)
+			{
+				menuLevel = 1;
+        drawMenu();
+				readNav();	//Check for menu selection
+				showMode();	// should be 1
+
+				if (digitalRead(SEL_PIN) == HIGH)
+					{
+						if (highlighted == 0)
+							{
+								displayMode = TEMP_MENU;
+								tft.quickFill(BLACK);
+								highlighted = 0;
+								drawTempMenu();
+							}
+						if (highlighted == 1)
+							{
+								displayMode == TIMER_MENU;
+								tft.quickFill(BLACK);
+								highlighted = 0;
+								drawTimerMenu();
+							}
+					}
+			 }
+
+		else if (displayMode == TEMP_MENU)
+			{
+				if (digitalRead(MENU_PIN) == HIGH)
+					{
+						tft.quickFill(BLACK);
+						displayMode = SHOW_MENU;
+						menuLevel = 1;
+					}
+				showMode();	//should be 2
+				readNav();
+				drawTempMenu();
+				setDisplayMode();
+				}
+
+		else if (displayMode == SET_UP_TEMP || SET_DOWN_TEMP)
+			{
+				showMode();	//should be 3 or 4
+				if (digitalRead(SEL_PIN) == HIGH)
+					{
+						displayMode = TEMP_MENU;
+						showMode();	//should be 2
+					}
+				else if (digitalRead(UP_PIN) == HIGH)
+					{
+						incrTemp();
+					}
+				else if (digitalRead(DOWN_PIN) == HIGH)
+					{
+						decrTemp();
+					}
+				else if (digitalRead(MENU_PIN) == HIGH)
+					{
+						tft.quickFill(BLACK);
+						menuLevel = 1;
+						displayMode = SHOW_MENU;
+						//setDisplayMode();
+					}
+			}
+
+		else if (displayMode == TIMER_MENU)
+			{
+				setDisplayMode();
+				//showMode(); 	// should be 5
+				//readNav();
+				//drawTempMenu();
+			}
+  }
+
+void showMode()
+	{
+		tft.setTextColor(GREEN, BLACK);
+		tft.setCursor(0, 70);
+		tft.print(displayMode);
+	}
+
+void readNav()
+	{
+		if (digitalRead(DOWN_PIN) == HIGH)
+			{
+				upDown = DOWN;
+				toggleHighLight();
+			}
+		if (digitalRead(UP_PIN) == HIGH)
+			{
+				upDown = UP;
+				toggleHighLight();
+			}
+	}
+
+/////////////////////////////////////////////////////////////////////////////
+void setDisplayMode()
+	{
+		// if main window dislayed, switch to menu and vice versa
+		switch (displayMode)
+			{
+				case SHOW_MAIN:
+					{
+						displayMode = SHOW_MENU;
+						break;
+					}
+				case SHOW_MENU:
+					{
+						displayMode = SHOW_MAIN;
+						break;
+					}
+				case TEMP_MENU:
+					{
+						if (digitalRead(SEL_PIN) == HIGH)
+							{
+								if (highlighted == 0)
+									{
+										displayMode = SET_UP_TEMP;
+										tft.quickFill(BLACK);
+										//highlighted = 0;
+										drawTempMenu();
+									}
+								else if (highlighted == 1)
+									{
+										displayMode = SET_DOWN_TEMP;
+										tft.quickFill(BLACK);
+										//highlighted = 0;
+										drawTempMenu();
+									}
+							}
+					}
+
+					case TIMER_MENU:
+						{
+							showMode(); 	// should be 5
+							readNav();
+							drawTempMenu();
+						}
+				}
+	}
+
+/////////////////////////////////////////////////////////////////////////////
+void toggleHighLight()
+	{
+		switch (upDown)
+			{
+				case UP:
+					{
+						highlighted -= 1;
+						break;
+					}
+				case DOWN:
+					{
+						highlighted += 1;
+						break;
+					}
+			}
+	}
+
+//////////////////////////////////////////////////////////////////////////////
+void alarm (void) {
+    tft.setCursor(0,30);
+    tft.setTextColor(RED);
+		tft.println( "ALARM" );
+		//rtc.ClearAlarm1Flag();
+		itr = false;
+    tft.setCursor(0, 0);
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+void drawMenu()
+  {
+    tft.setCursor(0, 0);
+    if (highlighted == 0)
+      {
+        tft.setTextColor(GREEN, RED);
+        tft.println("Set Temp");
+        tft.setTextColor(GREEN, BLACK);
+        tft.println("Set Timer");
+        tft.println("Settings");
+      }
+    else if (highlighted == 1)
+      {
+        tft.setTextColor(GREEN, BLACK);
+        tft.println("Set Temp");
+        tft.setTextColor(GREEN, RED);
+        tft.println("Set Timer");
+        tft.setTextColor(GREEN, BLACK);
+        tft.println("Settings");
+      }
+    else if (highlighted == 2)
+    {
+      tft.setTextColor(GREEN, BLACK);
+      tft.println("Set Temp");
+      tft.println("Set Timer");
+      tft.setTextColor(GREEN, RED);
+      tft.println("Settings");
+    }
+  }
+
+void drawTempMenu()
+	{
+		tft.setCursor(0, 0);
+		tft.setTextColor(BLUE, BLACK);
+		tft.println(" Set Temp");
+
+		tft.setCursor(0, 22);
+    tft.setTextColor(GREEN, BLACK);
+    tft.print("Up");
+		tft.setCursor(100, 22);
+		if (highlighted == 0)
+			{
+				tft.setTextColor(GREEN, RED);
+			}
+		else
+			{
+				tft.setTextColor(GREEN, BLACK);
+			}
+		tft.print(upTemp);
+		tft.setCursor(0, 40);
+    tft.setTextColor(GREEN, BLACK);
+    tft.print("Down");
+		tft.setCursor(100, 40);
+		if (highlighted == 1)
+			{
+				tft.setTextColor(GREEN, RED);
+			}
+		else
+			{
+				tft.setTextColor(GREEN, BLACK);
+			}
+    tft.print(downTemp);
+	}
+
+void incrTemp()
+	{
+		tft.setTextColor(RED, BLACK);
+		if (highlighted == 0)
+		{
+			tft.setCursor(100, 22);
+			upTemp += 1;
+			tft.print(upTemp);
+		}
+		else if (highlighted == 1)
+		{
+			tft.setCursor(100, 40);
+			downTemp += 1;
+			tft.print(downTemp);
+		}
+	}
+
+void decrTemp()
+	{
+		tft.setTextColor(RED, BLACK);
+		if (highlighted == 0)
+		{
+			tft.setCursor(100, 22);
+			upTemp -= 1;
+			tft.print(upTemp);
+		}
+		else if (highlighted == 1)
+		{
+			tft.setCursor(100, 40);
+			downTemp += 1;
+			tft.print(downTemp);
+		}
+	}
+
+
+void drawTimerMenu()
+	{
+		uint8_t alarmState =MCP7940_ALM0IF;
+		tft.quickFill(BLACK);
+		tft.setCursor(0, 0);
+		tft.println("alarmState");
+		tft.println(alarmState);
+	}
+///////////////////////////////////////////////////////////////////////////////
+void drawTime()
+  {
+		tft.setCursor(0, 0);
+    tft.setTextColor(BLUE, BLACK);
+		DateTime now = MCP7940.now();
+		sec = now.second();
+		min = now.minute();
+		hr = now.hour();
+		sprintf(timeBuff,"%02d:%02d:%02d", now.hour(), now.minute(), now.second());
+		tft.print(timeBuff);
+    tft.setCursor(0, 0);
+  }
+
+///////////////////////////////////////////////////////////////////////////
+void drawtext(char *text, uint16_t color)
+{
+  tft.setCursor(0,0);
+  tft.setTextColor(color);
+  tft.print(text);
 }
