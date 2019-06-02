@@ -37,25 +37,31 @@
 #define PIN_INT 1 //From RTC
 
 // Color definitions
+// 24 to 16 bit colour converter: http://drakker.org/convert_rgb565.html
 #define BLACK           0x0000
 #define BLUE            0x001F
+#define DKBLUE					0x000F
 #define RED             0xF800
+#define DKRED						0x7800
 #define GREEN           0x07E0
+#define DKGREEN					0x03E0
 #define CYAN            0x07FF
 #define MAGENTA         0xF81F
 #define YELLOW          0xFFE0
 #define WHITE           0xFFFF
+#define GREY						0x7BEF		// 50% grey
+#define DKGREY					0x39E7
 
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1351.h>
+#include "FreeSans12pt7b.h"
 #include <SPI.h>
 //#include <RTCC_MCP7940N.h>
 #include <MCP7940.h>
 #include <max1720x.h>
 //#include <EnableInterrupt.h>
 #include "PinChangeInterrupt.h"
-//#include "custom.h"
 
 // Option 1: use any pins but a little slower
 //Adafruit_SSD1351 tft = Adafruit_SSD1351(SCREEN_WIDTH, SCREEN_HEIGHT, CS_PIN, DC_PIN, MOSI_PIN, SCLK_PIN, RST_PIN);
@@ -75,6 +81,9 @@ max1720x gauge;
 //char batt[7];
 //Display
 
+/*! ///< Enumeration of MCP7940 alarm types */
+enum alarmTypes {matchSeconds,matchMinutes,matchHours,matchDayOfWeek,matchDayOfMonth,Unused1,Unused2,matchAll,Unknown};
+
 enum SwitchStates: byte {IS_OPEN, IS_RISING, IS_CLOSED, IS_FALLING} ;
 SwitchStates switchMenu = IS_OPEN;
 SwitchStates switchSel = IS_OPEN;
@@ -82,17 +91,22 @@ SwitchStates switchUp = IS_OPEN;
 SwitchStates switchDown = IS_OPEN;
 
 enum DisplayModes: byte {SHOW_MAIN, SHOW_MENU, TEMP_MENU, SET_UP_TEMP,
-	 UP_ENABLE, SET_DOWN_TEMP, DOWN_ENABLE, TIMER_MENU, SET_HOUR, SET_MIN,
-	  SETTINGS_MENU};
+ SET_DOWN_TEMP, TIMER_MENU, SET_HOUR, SET_MIN, SETTINGS_MENU, SET_DEFUP_TEMP,
+ SET_DEFDOWN_TEMP};
 DisplayModes displayMode = SHOW_MAIN;
 enum UpDown: byte {UP, DOWN};
 UpDown upDown;
 
 byte highlighted = 0;
 bool highlightToggled = false;
+byte defUpTemp = 78;
+byte defDownTemp = 30;
 byte upTemp = 78;
 byte downTemp = 30;
 
+bool mainDisplayed = false;
+bool upEnabled = false;
+bool downEnabled = false;
 bool timerEnabled = false;
 
 volatile bool itr = false;
@@ -167,11 +181,32 @@ void loop()
 		upSwitch();
 		downSwitch();
 		setDisplayMode();
+    if (MCP7940.isAlarm(0))
+      {
+        alarm();
+      }
 		// Debugging:
-		tft.setTextColor(BLUE, BLACK);
-		tft.setCursor(0, 85);
-		tft.println(highlighted);
+		showDebug();
 	}
+
+//////////////////////////////////////////////////////////////////////////////
+void setAlarm()
+  {
+    DateTime now = MCP7940.now();
+    now = now + TimeSpan(0, AlHr, AlMin, 0);
+    MCP7940.setAlarm(0, matchAll, now, true);
+  }
+
+
+void alarm()
+  {
+      tft.setCursor(0,30);
+      tft.setTextColor(RED);
+  		tft.println( "ALARM" );
+  		//rtc.ClearAlarm1Flag();
+  		//itr = false;
+      //tft.setCursor(0, 0);
+  }
 
 //////////////////////////////////////////////////////////////////////////////
 void setDisplayMode()
@@ -180,12 +215,18 @@ void setDisplayMode()
       {
         case SHOW_MAIN:
           {
-            drawTime();
-    				showMode();	// should be 0
+						if (mainDisplayed == false)
+							{
+								drawMain();
+								mainDisplayed = true;
+							}
+						drawTime();
+    				// mode 0
             if (switchMenu == IS_FALLING)
               {
 								tft.fillScreen(BLACK);
                 displayMode = SHOW_MENU;
+								mainDisplayed = false;
 								drawMenu();
               }
 						break;
@@ -199,7 +240,7 @@ void setDisplayMode()
 								drawMenu();
 								highlightToggled = false;
 							}
-    				showMode();	// should be 1
+    				// mode 1
             if (switchMenu == IS_FALLING)
               {
 								tft.fillScreen(BLACK);
@@ -224,19 +265,27 @@ void setDisplayMode()
 										drawTimerMenu();
 										break;
 									}
+								if (highlighted == 2)
+									{
+										tft.quickFill(BLACK);
+										displayMode = SETTINGS_MENU;
+										highlighted = 0;
+										drawSettingsMenu();
+										break;
+									}
 							}
 						break;
           }
 
 				case TEMP_MENU:
 					{
-						readNav(1);	// Select up or down temp
+						// mode 2
+						readNav(3);	// Select up or down temp
 						if (highlightToggled)
 							{
 								drawTempMenu();
 								highlightToggled = false;
 							}
-						showMode();	//should be 2
 						if (switchMenu == IS_FALLING)
               {
 								tft.fillScreen(BLACK);
@@ -253,8 +302,20 @@ void setDisplayMode()
 									}
 								if (highlighted == 1)
 									{
+										byte u = 'u';
+										enable(u);
+										drawTempMenu();
+									}
+								if (highlighted == 2)
+									{
 										displayMode = SET_DOWN_TEMP;
 										break;
+									}
+								if (highlighted == 3)
+									{
+										byte d = 'd';
+										enable(d);
+										drawTempMenu();
 									}
 							}
 						break;
@@ -262,13 +323,12 @@ void setDisplayMode()
 
 				case SET_UP_TEMP:
 					{
-						showMode();	//should be 3
+						// mode 3
 						highlightUpTemp();
 						if (switchSel == IS_FALLING)
 							{
 								displayMode = TEMP_MENU;
 								drawTempMenu();
-								showMode();	//should be 2
 								break;
 							}
 						else if (switchUp == IS_CLOSED)
@@ -286,6 +346,7 @@ void setDisplayMode()
 								tft.quickFill(BLACK);
 								//menuLevel = 1;
 								displayMode = SHOW_MENU;
+                drawMenu();
 								break;
 							}
 						break;
@@ -293,13 +354,12 @@ void setDisplayMode()
 
 				case SET_DOWN_TEMP:
 					{
-						showMode();	//should be 5
+						// mode 4
 						highlightDownTemp();
 						if (switchSel == IS_FALLING)
 							{
 								displayMode = TEMP_MENU;
 								drawTempMenu();
-								showMode();	//should be 2
 								break;
 							}
 						else if (switchUp == IS_CLOSED)
@@ -316,6 +376,7 @@ void setDisplayMode()
 							{
 								tft.quickFill(BLACK);
 								displayMode = SHOW_MENU;
+                drawMenu();
 								break;
 							}
 						break;
@@ -323,13 +384,13 @@ void setDisplayMode()
 
 				case TIMER_MENU:
 					{
+						// mode 5
 						readNav(2);
 						if (highlightToggled)
 							{
 								drawTimerMenu();
 								highlightToggled = false;
 							}
-						showMode();	//should be 7
 						if (switchMenu == IS_FALLING)
               {
 								tft.fillScreen(BLACK);
@@ -354,7 +415,7 @@ void setDisplayMode()
 										byte t = 't';
 										enable(t);
 										drawTimerMenu();
-										showMode();	//should be 7
+                    setAlarm();
 										break;
 									}
 								}
@@ -363,13 +424,12 @@ void setDisplayMode()
 
 				case SET_HOUR:
 					{
-						showMode();	//should be 8
+						// mode 6
 						highlightSetHour();
 						if (switchSel == IS_FALLING)
 							{
 								displayMode = TIMER_MENU;
 								drawTimerMenu();
-								showMode();	//should be 7
 								break;
 							}
 						else if (switchUp == IS_CLOSED)
@@ -387,6 +447,7 @@ void setDisplayMode()
 								tft.quickFill(BLACK);
 								//menuLevel = 1;
 								displayMode = SHOW_MENU;
+                drawMenu();
 								break;
 							}
 						break;
@@ -394,13 +455,12 @@ void setDisplayMode()
 
 				case SET_MIN:
 					{
-						showMode();	//should be 9
+						// mode 7
 						highlightSetMin();
 						if (switchSel == IS_FALLING)
 							{
 								displayMode = TIMER_MENU;
 								drawTimerMenu();
-								showMode();	//should be 7
 								break;
 							}
 						else if (switchUp == IS_CLOSED)
@@ -418,6 +478,101 @@ void setDisplayMode()
 								tft.quickFill(BLACK);
 								//menuLevel = 1;
 								displayMode = SHOW_MENU;
+                drawMenu();
+								break;
+							}
+						break;
+					}
+
+				case SETTINGS_MENU:
+					{
+						//mode 8
+						readNav(1);
+						if (highlightToggled)
+							{
+								drawSettingsMenu();
+								highlightToggled = false;
+							}
+						if (switchMenu == IS_FALLING)
+              {
+								tft.fillScreen(BLACK);
+                displayMode = SHOW_MENU;
+								drawMenu();
+								break;
+              }
+						if (switchSel == IS_FALLING)
+							{
+								if (highlighted == 0)
+									{
+										displayMode = SET_DEFUP_TEMP;
+										break;
+									}
+								if (highlighted == 1)
+									{
+										displayMode = SET_DEFDOWN_TEMP;
+										break;
+									}
+							}
+              break;
+					}
+
+				case SET_DEFUP_TEMP:
+					{
+						// mode 9
+						highlightDefUpTemp();
+						if (switchSel == IS_FALLING)
+							{
+								displayMode = SETTINGS_MENU;
+								drawSettingsMenu();
+								break;
+							}
+						else if (switchUp == IS_CLOSED)
+							{
+								incrDefTemp();
+								break;
+							}
+						else if (switchDown == IS_CLOSED)
+							{
+								decrDefTemp();
+								break;
+							}
+						else if (switchMenu == IS_FALLING)
+							{
+								tft.quickFill(BLACK);
+								//menuLevel = 1;
+								displayMode = SHOW_MENU;
+                drawMenu();
+								break;
+							}
+						break;
+					}
+
+				case SET_DEFDOWN_TEMP:
+					{
+						// mode 10
+						highlightDefDownTemp();
+						if (switchSel == IS_FALLING)
+							{
+								displayMode = SETTINGS_MENU;
+								drawSettingsMenu();
+								break;
+							}
+						else if (switchUp == IS_CLOSED)
+							{
+								incrDefTemp();
+								break;
+							}
+						else if (switchDown == IS_CLOSED)
+							{
+								decrDefTemp();
+								break;
+							}
+						else if (switchMenu == IS_FALLING)
+							{
+								tft.quickFill(BLACK);
+								//menuLevel = 1;
+								displayMode = SHOW_MENU;
+                drawMenu();
 								break;
 							}
 						break;
@@ -555,13 +710,26 @@ void downSwitch()
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-void showMode()
+void showDebug()
 	{
 		tft.setTextColor(BLUE, BLACK);
-		tft.setCursor(0, 100);
+		tft.setTextSize(1);
+		tft.setCursor(2, 118);
 		tft.print("Mode ");
 		tft.print(displayMode);
+		tft.print(" HL ");
+		tft.print(highlighted);
+    tft.print(" RAM ");
+    tft.print(freeRam());
+    tft.setTextSize(2);
 	}
+
+int freeRam ()
+  {
+    extern int __heap_start, *__brkval;
+    int v;
+    return (int) &v - (__brkval == 0 ? (int) &__heap_start : (int) __brkval);
+  } // freeRam
 
 void readNav(int max)
 	{
@@ -610,28 +778,64 @@ void toggleHighLight(int max)
 			}
 	}
 
-//////////////////////////////////////////////////////////////////////////////
-void alarm (void) {
-    tft.setCursor(0,30);
-    tft.setTextColor(RED);
-		tft.println( "ALARM" );
-		//rtc.ClearAlarm1Flag();
-		itr = false;
-    tft.setCursor(0, 0);
-}
+
+///////////////////////////////////////////////////////////////////////////////
+void drawMain()
+	{
+		tft.drawLine(0, 60, 128, 60, DKBLUE);
+		tft.drawLine(80, 0, 80, 60, DKBLUE);
+		tft.drawLine(80, 30, 128, 30, DKBLUE);
+		tft.drawRect(0, 0, 128, 128, DKBLUE);
+		//Current temp:
+		//tft.setCursor(16, 17);
+		//tft.setTextSize(4);
+    tft.setCursor(13, 40);
+    tft.setFont(&FreeSans12pt7b);
+		tft.setTextColor(BLUE, BLACK);
+		tft.print("68");
+    tft.setFont();
+		tft.drawCircle(68, 20, 4, BLUE);
+		tft.drawCircle(68, 20, 3, BLUE);
+		//Up temp
+		tft.setCursor(92, 9);
+		tft.setTextSize(2);
+		tft.setTextColor(RED, BLACK);
+		tft.print("65");
+		tft.drawCircle(118, 11, 2, RED);
+		tft.drawCircle(118, 11, 1, RED);
+		//down Temp
+		tft.setCursor(92, 38);
+		tft.setTextSize(2);
+		tft.setTextColor(DKGREY, BLACK);
+		tft.print("30");
+		tft.drawCircle(118, 40, 2, DKGREY);
+		tft.drawCircle(118, 40, 1, DKGREY);
+	}
 
 ///////////////////////////////////////////////////////////////////////////////
 void drawTime()
   {
-		tft.setCursor(0, 0);
+		tft.setCursor(18, 100);
+		tft.setTextSize(1);
     tft.setTextColor(BLUE, BLACK);
 		DateTime now = MCP7940.now();
 		sec = now.second();
 		min = now.minute();
 		hr = now.hour();
-		sprintf(timeBuff,"%02d:%02d:%02d", now.hour(), now.minute(), now.second());
+		sprintf(timeBuff,"%02d:%02d:%02d", hr, min, sec);
 		tft.print(timeBuff);
-    tft.setCursor(0, 0);
+    tft.setTextSize(2);
+    if (timerEnabled == true)
+      {
+        tft.setCursor(18, 78);
+    		tft.setTextColor(RED, BLACK);
+        uint8_t alarmType;
+        DateTime alarmTime = MCP7940.getAlarm(0, alarmType);
+    		TimeSpan timeToGo = (alarmTime - now);
+    		sprintf(timeBuff,"%02d:%02d:%02d", timeToGo.hours(),
+         timeToGo.minutes(), timeToGo.seconds());
+    		tft.print(timeBuff);
+      }
   }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -640,81 +844,144 @@ void drawMenu()
     tft.setCursor(0, 0);
     if (highlighted == 0)
       {
-        tft.setTextColor(GREEN, RED);
+        tft.setTextColor(WHITE, DKGREEN);
         tft.println("Set Temp");
         tft.setTextColor(GREEN, BLACK);
+				tft.setCursor(0, 22);
         tft.println("Set Timer");
+				tft.setCursor(0, 44);
         tft.println("Settings");
       }
     else if (highlighted == 1)
       {
         tft.setTextColor(GREEN, BLACK);
         tft.println("Set Temp");
-        tft.setTextColor(GREEN, RED);
+        tft.setTextColor(WHITE, DKGREEN);
+				tft.setCursor(0, 22);
         tft.println("Set Timer");
         tft.setTextColor(GREEN, BLACK);
+				tft.setCursor(0, 44);
         tft.println("Settings");
       }
     else if (highlighted == 2)
     {
       tft.setTextColor(GREEN, BLACK);
       tft.println("Set Temp");
+			tft.setCursor(0, 22);
       tft.println("Set Timer");
-      tft.setTextColor(GREEN, RED);
+      tft.setTextColor(WHITE, DKGREEN);
+			tft.setCursor(0, 44);
       tft.println("Settings");
     }
   }
 
 void drawTempMenu()
 	{
+		//Up temp
 		tft.setCursor(0, 0);
 		tft.setTextColor(BLUE, BLACK);
-		tft.println(" Set Temp");
+		tft.print(" Set Temp");
 		tft.setCursor(0, 22);
 		if (highlighted == 0)
 			{
-				tft.setTextColor(GREEN, RED);
+				tft.setTextColor(WHITE, DKGREEN);
 			}
 		else
 			{
 				tft.setTextColor(GREEN, BLACK);
 			}
-    tft.print("Up");
+    tft.print("Maximum");
 		tft.setCursor(100, 22);
-		tft.setTextColor(GREEN, BLACK);
+		tft.setTextColor(RED, BLACK);
 		tft.print(upTemp);
-		tft.setCursor(0, 40);
+		// Enable up temp:
+		tft.setCursor(0, 40);	// Prepare to draw enabled switch
 		if (highlighted == 1)
 			{
-				tft.setTextColor(GREEN, RED);
+				tft.setTextColor(WHITE, DKGREEN);
 			}
 		else
 			{
 				tft.setTextColor(GREEN, BLACK);
 			}
-    tft.print("Down");
-		tft.setCursor(100, 40);
-		tft.setTextColor(GREEN, BLACK);
+		tft.print("Enabled");
+		tft.drawRoundRect(105, 40, 16, 16, 2, GREEN);
+		if (upEnabled == true)
+			{
+				tft.fillRoundRect(106, 41, 14, 14, 2, RED);
+			}
+
+		// Down temp
+		tft.setCursor(0, 76);
+		if (highlighted == 2)
+			{
+				tft.setTextColor(WHITE, DKGREEN);
+			}
+		else
+			{
+				tft.setTextColor(GREEN, BLACK);
+			}
+    tft.print("Minimum");
+		if (downTemp >= 10)
+			{
+				tft.setCursor(100, 76);
+			}
+		else
+			{
+				tft.setCursor(112, 76);
+			}
+		tft.setTextColor(RED, BLACK);
     tft.print(downTemp);
+
+		// Enable down temp:
+		tft.setCursor(0, 94);	// Prepare to draw enabled switch
+		if (highlighted == 3)
+			{
+				tft.setTextColor(WHITE, DKGREEN);
+			}
+		else
+			{
+				tft.setTextColor(GREEN, BLACK);
+			}
+		tft.print("Enabled");
+		tft.drawRoundRect(105, 94, 16, 16, 2, GREEN);
+		if (downEnabled == true)
+			{
+				tft.fillRoundRect(106, 95, 14, 14, 2, RED);
+			}
 	}
 
 void highlightUpTemp()
 	{
 		tft.setTextColor(GREEN, BLACK);
 		tft.setCursor(0, 22);
-		tft.print("Up");
-		tft.setTextColor(GREEN, RED);
-		tft.setCursor(100, 22);
+		tft.print("Maximum");
+    if (upTemp >= 10)
+			{
+				tft.setCursor(100, 22);
+			}
+		else
+			{
+				tft.setCursor(112, 22);
+			}
+		tft.setTextColor(WHITE, RED);
 		tft.print(upTemp);
 	}
 
 void highlightDownTemp()
 	{
 		tft.setTextColor(GREEN, BLACK);
-		tft.setCursor(0, 40);
-		tft.print("Down");
-		tft.setTextColor(GREEN, RED);
-		tft.setCursor(100, 40);
+		tft.setCursor(0, 76);
+		tft.print("Minimum");
+		tft.setTextColor(WHITE, RED);
+		if (downTemp >= 10)
+			{
+				tft.setCursor(100, 76);
+			}
+		else if (downTemp < 10)
+			{
+				tft.setCursor(112, 76);
+			}
 		tft.print(downTemp);
 	}
 
@@ -729,15 +996,22 @@ void incrTemp()
 					tft.print(upTemp);
 				}
 		}
-		else if (highlighted == 1)
-		{
-			if (downTemp < 99)
-				{
-					tft.setCursor(100, 40);
-					downTemp += 1;
-					tft.print(downTemp);
-				}
-		}
+		else if (highlighted == 2)
+			{
+				tft.setCursor(100, 76);
+				if (downTemp >= 9)
+					{
+						downTemp += 1;
+						tft.print(downTemp);
+					}
+				else if (downTemp < 9)
+					{
+						tft.fillRect(100, 76, 12, 16, BLACK);
+						tft.setCursor(112, 76);
+						downTemp += 1;
+						tft.print(downTemp);
+					}
+			}
 	}
 
 void decrTemp()
@@ -751,11 +1025,18 @@ void decrTemp()
 					tft.print(upTemp);
 				}
 		}
-		else if (highlighted == 1)
+		else if (highlighted == 2)
 		{
-			if (downTemp > 1)
+			if (downTemp > 10 )
 				{
-					tft.setCursor(100, 40);
+					downTemp -= 1;
+					tft.setCursor(100, 76);
+					tft.print(downTemp);
+				}
+			else if (downTemp >= 1)
+				{
+					tft.fillRect(100, 76, 12, 16, BLACK);
+					tft.setCursor(112, 76);
 					downTemp -= 1;
 					tft.print(downTemp);
 				}
@@ -770,7 +1051,7 @@ void drawTimerMenu()
 		tft.setCursor(0, 22);	// Prepare to draw hours
 		if (highlighted == 0)
 			{
-				tft.setTextColor(GREEN, RED);
+				tft.setTextColor(WHITE, DKGREEN);
 			}
 		else
 			{
@@ -778,7 +1059,7 @@ void drawTimerMenu()
 			}
 		tft.print("Hours");
 		tft.setCursor(100, 22);
-		tft.setTextColor(GREEN, BLACK);
+		tft.setTextColor(RED, BLACK);
 		if (AlHr < 10)
 			{
 				tft.print(0);
@@ -788,7 +1069,7 @@ void drawTimerMenu()
 		tft.setCursor(0, 40);	// Prepare to draw minutes
 		if (highlighted == 1)
 			{
-				tft.setTextColor(GREEN, RED);
+				tft.setTextColor(WHITE, DKGREEN);
 			}
 		else
 			{
@@ -796,7 +1077,7 @@ void drawTimerMenu()
 			}
 		tft.print("Mins");
 		tft.setCursor(100, 40);
-		tft.setTextColor(GREEN, BLACK);
+		tft.setTextColor(RED, BLACK);
 		if (AlMin < 10)
 			{
 				tft.print(0);
@@ -806,7 +1087,7 @@ void drawTimerMenu()
 		tft.setCursor(0, 58);	// Prepare to draw enabled switch
 		if (highlighted == 2)
 			{
-				tft.setTextColor(GREEN, RED);
+				tft.setTextColor(WHITE, DKGREEN);
 			}
 		else
 			{
@@ -825,7 +1106,7 @@ void highlightSetHour()
 		tft.setTextColor(GREEN, BLACK);
 		tft.setCursor(0, 22);
 		tft.print("Hours");
-		tft.setTextColor(GREEN, RED);
+		tft.setTextColor(WHITE, RED);
 		tft.setCursor(100, 22);
 		if (AlHr > 12)
 			{
@@ -843,7 +1124,7 @@ void highlightSetMin()
 		tft.setTextColor(GREEN, BLACK);
 		tft.setCursor(0, 40);
 		tft.print("Mins");
-		tft.setTextColor(GREEN, RED);
+		tft.setTextColor(WHITE, RED);
 		tft.setCursor(100, 40);
 		if (AlMin > 59)
 			{
@@ -890,35 +1171,226 @@ void incrTime()
 
 void decrTime()
 	{
-		if (highlighted == 0)	//increment SET_HOUR
+		if (highlighted == 0)	//decrement SET_HOUR
 			{
-				tft.setCursor(100, 22);
-				tft.setTextColor(GREEN, RED);
-				AlHr -= 1;
-				if (AlHr < 10)
+				//tft.setTextColor(GREEN, RED);
+				if (AlHr >= 1)
 					{
-						tft.print(0);
+						tft.setCursor(100, 22);
+						AlHr -= 1;
+						if (AlHr < 10)
+							{
+								tft.print(0);
+							}
+				    tft.print(AlHr);
 					}
-		    tft.print(AlHr);
 			}
 		else if (highlighted == 1)
 			{
-				tft.setCursor(100, 40);
-				tft.setTextColor(GREEN, RED);
-				AlMin -= 1;
-				if (AlMin < 10)
+				//tft.setTextColor(GREEN, RED);
+				if (AlMin >= 1)
 					{
-						tft.print(0);
+						tft.setCursor(100, 40);
+						AlMin -= 1;
+						if (AlMin < 10)
+							{
+								tft.print(0);
+							}
+						tft.print(AlMin);
 					}
-				tft.print(AlMin);
 			}
+	}
+
+void drawSettingsMenu()
+	{
+		tft.setCursor(0, 0);
+		tft.setTextColor(BLUE, BLACK);
+		tft.print(" Settings");
+		tft.setCursor(0, 22);
+		if (highlighted == 0)
+			{
+				tft.setTextColor(WHITE, DKGREEN);
+			}
+		else
+			{
+				tft.setTextColor(GREEN, BLACK);
+			}
+    tft.print("Max Temp");
+    if (defUpTemp >= 10)
+			{
+				tft.setCursor(100, 22);
+			}
+		else
+			{
+				tft.setCursor(112, 2);
+			}
+		tft.setTextColor(RED, BLACK);
+		tft.print(defUpTemp);
+		tft.setCursor(0, 40);
+		if (highlighted == 1)
+			{
+				tft.setTextColor(WHITE, DKGREEN);
+			}
+		else
+			{
+				tft.setTextColor(GREEN, BLACK);
+			}
+		tft.print("Min Temp");
+    if (defDownTemp >= 10)
+			{
+				tft.setCursor(100, 40);
+			}
+		else
+			{
+				tft.setCursor(112, 40);
+			}
+		tft.setTextColor(RED, BLACK);
+		tft.print(defDownTemp);
+	}
+
+void highlightDefUpTemp()
+	{
+		tft.setTextColor(GREEN, BLACK);
+		tft.setCursor(0, 22);
+		tft.print("Max Temp");
+    if (defUpTemp >= 10)
+			{
+				tft.setCursor(100, 22);
+			}
+		else
+			{
+				tft.setCursor(112, 22);
+			}
+		tft.setTextColor(WHITE, RED);
+		tft.print(defUpTemp);
+	}
+
+void highlightDefDownTemp()
+	{
+		tft.setTextColor(GREEN, BLACK);
+		tft.setCursor(0, 40);
+		tft.print("Min Temp");
+		tft.setTextColor(WHITE, RED);
+		if (defDownTemp >= 10)
+			{
+				tft.setCursor(100, 40);
+			}
+		else if (defDownTemp < 10)
+			{
+				tft.setCursor(112, 40);
+			}
+		tft.print(defDownTemp);
+	}
+
+void incrDefTemp()
+	{
+		if (highlighted == 0)
+		{
+			if (defUpTemp < 99)
+				{
+          if (defUpTemp >= 10)
+      			{
+      				tft.setCursor(100, 22);
+      			}
+      		else
+      			{
+      				tft.setCursor(112, 22);
+      			}
+					defUpTemp += 1;
+					tft.print(defUpTemp);
+				}
+		}
+		else if (highlighted == 1)
+			{
+				tft.setCursor(100, 40);
+				if (defDownTemp >= 9)
+					{
+						defDownTemp += 1;
+						tft.print(defDownTemp);
+					}
+				else if (defDownTemp < 9)
+					{
+						tft.fillRect(100, 40, 12, 16, BLACK);
+						tft.setCursor(112, 40);
+						defDownTemp += 1;
+						tft.print(defDownTemp);
+					}
+			}
+	}
+
+void decrDefTemp()
+	{
+		if (highlighted == 0)
+		{
+			if (defUpTemp  > 1)
+				{
+          if (defUpTemp >= 10)
+      			{
+      				tft.setCursor(100, 22);
+      			}
+      		else
+      			{
+      				tft.setCursor(112, 22);
+      			}
+					defUpTemp -= 1;
+					tft.print(defUpTemp);
+				}
+		}
+		else if (highlighted == 1)
+		{
+			if (defDownTemp > 10 )
+				{
+					defDownTemp -= 1;
+					tft.setCursor(100, 40);
+					tft.print(defDownTemp);
+				}
+			else if (defDownTemp >= 1)
+				{
+					tft.fillRect(100, 40, 12, 16, BLACK);
+					tft.setCursor(112, 40);
+					defDownTemp -= 1;
+					tft.print(defDownTemp);
+				}
+		}
 	}
 
 ///////////////////////////////////////////////////////////////////////////////
 
 void enable(byte mode)
 	{
-		if (mode == 't')
+		if (mode == 'u')	// temp up
+			{
+				if (upEnabled == true)
+					{
+						tft.drawRoundRect(105, 40, 16, 16, 2, GREEN);
+						tft.fillRoundRect(106, 59, 14, 14, 2, BLACK);
+						upEnabled = false;
+					}
+				else
+					{
+						tft.drawRoundRect(105, 40, 16, 16, 2, GREEN);
+						tft.fillRoundRect(106, 41, 14, 14, 2, RED);
+						upEnabled = true;
+					}
+			}
+
+		if (mode == 'd')	// temp down
+			{
+				if (downEnabled == true)
+					{
+						tft.drawRoundRect(105, 94, 16, 16, 2, GREEN);
+						tft.fillRoundRect(106, 95, 14, 14, 2, BLACK);
+						downEnabled = false;
+					}
+				else
+					{
+						tft.drawRoundRect(105, 94, 16, 16, 2, GREEN);
+						tft.fillRoundRect(106, 95, 14, 14, 2, RED);
+						downEnabled = true;
+					}
+			}
+
+		if (mode == 't')	// timer
 			{
 				if (timerEnabled == true)
 					{
