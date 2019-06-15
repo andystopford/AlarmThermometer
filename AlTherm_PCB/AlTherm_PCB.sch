@@ -1742,8 +1742,6 @@ Text Label 6700 2150 0    50   ~ 0
 GND
 Text Label 6700 2350 0    50   ~ 0
 GND
-Text Notes 5950 1650 0    50   ~ 0
-CHECK PIN ASSIGNMENTS!
 $Comp
 L AlTherm_PCB:NCP1403 U8
 U 1 1 5CC00E50
@@ -1981,4 +1979,12 @@ Wire Wire Line
 	6200 5300 6000 5300
 Wire Wire Line
 	6200 5700 6200 5600
+Text Notes 8950 850  0    50   ~ 0
+Crystal and caps not used
+Text Notes 5750 5750 0    50   ~ 0
+4.7K works\nhere
+Text Notes 750  2650 0    50   ~ 0
+Prog resistor should be lower val.\n2.2K for max charging
+Text Notes 10050 4900 2    50   ~ 0
+Should be pullup.\nOmit and connect resistor \ndirectly across\nVCC and INTI connections.
 $EndSCHEMATC

@@ -35,6 +35,8 @@
 #define DOWN_PIN 5
 #define SEL_PIN 7
 #define PIN_INT 1 //From RTC
+#define BZR_PIN 6
+#define TEMP_PIN 3
 
 // Color definitions
 // 24 to 16 bit colour converter: http://drakker.org/convert_rgb565.html
@@ -52,16 +54,21 @@
 #define GREY						0x7BEF		// 50% grey
 #define DKGREY					0x39E7
 
-#include <Wire.h>
+//#include <Wire.h> //Supposedly needed for batt gauge
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1351.h>
-#include "FreeSans12pt7b.h"
+//#include "FreeSans12pt7b.h"
+//#include "GillSansNumbers12pt7b.h"
+//#include "FreeSevenSegNumFont.h"
 #include <SPI.h>
-//#include <RTCC_MCP7940N.h>
-#include <MCP7940.h>
-#include <max1720x.h>
+#include <MCP7940.h>  // RTC
+#include <max1720x.h> // Batt Gauge
+#include <OneWire.h>
+//#include <DallasTemperature.h>
 //#include <EnableInterrupt.h>
-#include "PinChangeInterrupt.h"
+//#include "PinChangeInterrupt.h"
+#include <EEPROM.h>
+
 
 // Option 1: use any pins but a little slower
 //Adafruit_SSD1351 tft = Adafruit_SSD1351(SCREEN_WIDTH, SCREEN_HEIGHT, CS_PIN, DC_PIN, MOSI_PIN, SCLK_PIN, RST_PIN);
@@ -82,7 +89,8 @@ max1720x gauge;
 //Display
 
 /*! ///< Enumeration of MCP7940 alarm types */
-enum alarmTypes {matchSeconds,matchMinutes,matchHours,matchDayOfWeek,matchDayOfMonth,Unused1,Unused2,matchAll,Unknown};
+enum alarmTypes {matchSeconds,matchMinutes,matchHours,matchDayOfWeek,matchDayOfMonth,Unused1,
+  Unused2,matchAll,Unknown};
 
 enum SwitchStates: byte {IS_OPEN, IS_RISING, IS_CLOSED, IS_FALLING} ;
 SwitchStates switchMenu = IS_OPEN;
@@ -99,29 +107,32 @@ UpDown upDown;
 
 byte highlighted = 0;
 bool highlightToggled = false;
-byte defUpTemp = 78;
-byte defDownTemp = 30;
-byte upTemp = 78;
-byte downTemp = 30;
+byte defUpTemp;
+byte defDownTemp;
+byte DefUpTemp_addr = 0; // EEPROM address for storing default value
+byte DefDownTemp_addr = 10; // EEPROM address for storing default value
+byte upTemp;
+byte downTemp;
+
+// Temperature
+OneWire oneWire(3);
+// declare DS18B20 device address
+byte tempSensor[] = {0x28, 0xA1, 0x2F, 0x9A, 0x07, 0x00, 0x00, 0x62};
+byte tempC;
+unsigned long previousMillisTemp = 0;
+unsigned long previousMillisAlarm = 0;
+byte buzrState = LOW;
 
 bool mainDisplayed = false;
 bool upEnabled = false;
 bool downEnabled = false;
 bool timerEnabled = false;
 
-volatile bool itr = false;
-
-static byte sec;		//Do these need to be static?
-static byte min;
-static byte hr;
+byte sec;
+byte min;
+byte hr;
 byte AlMin = 0;
 byte AlHr = 0;
-
-void alarmint()
-{
-	// Just set flag so main "thread" can act on it
-	itr = true;
-}
 
 void setup()
 {
@@ -129,23 +140,26 @@ void setup()
 	pinMode(UP_PIN, INPUT_PULLUP);
 	pinMode(DOWN_PIN, INPUT_PULLUP);
 	pinMode(SEL_PIN, INPUT_PULLUP);
+  pinMode(BZR_PIN, OUTPUT);
+  digitalWrite(BZR_PIN, LOW);
 
   //attachPCINT(DOWN_PIN, testDown, IS_FALLING);
-  Wire.begin();
+  //Wire.begin();
   tft.begin();
   // You can optionally rotate the display by running the line below.
   // Note that a value of 0 means no rotation, 1 means 90 clockwise,
   // 2 means 180 degrees clockwise, and 3 means 270 degrees clockwise.
-  //tft.setRotation(2);
+  tft.setRotation(2);
   tft.setTextColor(CYAN);
   gauge.reset(); // Resets MAX1720x
   //Serial.println("gauge");
 	// RTC
 	while (!MCP7940.begin())
-		{ // Initialize RTC communications    //
+		{
+      // Initialize RTC communications
 			tft.fillScreen(BLACK);
 			tft.setCursor(0, 0);
-			tft.println(F("Unable to find MCP7940M"));
+			tft.println(F("Unable to find RTC"));
 			delay(2000);
 	 	}
  while (!MCP7940.deviceStatus()) // Turn oscillator on if necessary
@@ -165,47 +179,99 @@ void setup()
   tft.fillScreen(BLACK);
   tft.setCursor(0, 0);
   tft.setTextSize(2);
-	// Enable interrupt
-	pinMode( PIN_INT, INPUT_PULLUP );
+	// Enable interrupt (MAY NOT BE NEEDED)
+	//pinMode( PIN_INT, INPUT_PULLUP );
+  // FOLLOWING MAY NOT BE NEEDED......
   //attachInterrupt( digitalPinToInterrupt(PIN_INT), alarmint, RISING );
 	//enableInterrupt( PIN_INT, alarmint, CHANGE );
   //attachPinChangeInterrupt(PIN_INT, alarm, RISING);
-  attachPCINT(17, alarmint, CHANGE); //n.b. Serial must not be used with TX pin
+  //attachPCINT(17, alarmint, CHANGE); //n.b. Serial must not be used with TX pin
+  EEPROM.get(DefUpTemp_addr, defUpTemp);
+  EEPROM.get(DefDownTemp_addr, defDownTemp);
+  upTemp = defUpTemp;
+  downTemp = defDownTemp;
+  oneWire.select(tempSensor);
+  oneWire.write(0x1F);  // set 9-bit resolution
+
 }
 
 //////////////////////////////////////////////////////////////////////////////
 void loop()
-	{
+  {
 		menuSwitch();
 		selectSwitch();
 		upSwitch();
 		downSwitch();
 		setDisplayMode();
-    if (MCP7940.isAlarm(0))
+    if (upEnabled || downEnabled || timerEnabled)
       {
-        alarm();
+        checkAlarms();
       }
 		// Debugging:
 		showDebug();
 	}
 
 //////////////////////////////////////////////////////////////////////////////
-void setAlarm()
+void setTimeAlarm()
   {
     DateTime now = MCP7940.now();
     now = now + TimeSpan(0, AlHr, AlMin, 0);
     MCP7940.setAlarm(0, matchAll, now, true);
   }
 
-
 void alarm()
   {
-      tft.setCursor(0,30);
-      tft.setTextColor(RED);
-  		tft.println( "ALARM" );
-  		//rtc.ClearAlarm1Flag();
-  		//itr = false;
-      //tft.setCursor(0, 0);
+    unsigned long currentMillis = millis();
+
+    if (currentMillis - previousMillisAlarm > 500)
+      {
+        if (buzrState == LOW)
+          buzrState = HIGH;
+        else
+          buzrState = LOW;
+        digitalWrite(BZR_PIN, buzrState);
+        previousMillisAlarm = currentMillis;
+      }
+  }
+
+void checkAlarms()
+  {
+    if (MCP7940.isAlarm(0))
+      {
+        alarm();
+      }
+    if (tempC >= upTemp && upEnabled == true)
+      {
+        alarm();
+      }
+    if (tempC <= downTemp && downEnabled == true)
+      {
+        alarm();
+      }
+  }
+
+void stopAlarm()
+  {
+    if (MCP7940.getAlarmState(0))
+      {
+        MCP7940.clearAlarm(0);
+        timerEnabled = false;
+        digitalWrite(BZR_PIN, LOW);
+        tft.fillRect(18, 82, 109, 14, BLACK);
+        drawMain();
+      }
+    if (tempC >= upTemp && upEnabled == true)
+      {
+        upEnabled = false;
+        digitalWrite(BZR_PIN, LOW);
+        drawMain();
+      }
+    if (tempC <= downTemp && downEnabled == true)
+      {
+        downEnabled = false;
+        digitalWrite(BZR_PIN, LOW);
+        drawMain();
+      }
   }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -220,6 +286,7 @@ void setDisplayMode()
 								drawMain();
 								mainDisplayed = true;
 							}
+            drawTemp();
 						drawTime();
     				// mode 0
             if (switchMenu == IS_FALLING)
@@ -228,8 +295,14 @@ void setDisplayMode()
                 displayMode = SHOW_MENU;
 								mainDisplayed = false;
 								drawMenu();
+                break;
               }
-						break;
+
+            if (switchSel == IS_FALLING)
+              {
+                stopAlarm();
+                break;
+              }
           }
 
         case SHOW_MENU:
@@ -290,6 +363,7 @@ void setDisplayMode()
               {
 								tft.fillScreen(BLACK);
                 displayMode = SHOW_MENU;
+                highlighted = 1;
 								drawMenu();
 								break;
               }
@@ -304,7 +378,7 @@ void setDisplayMode()
 									{
 										byte u = 'u';
 										enable(u);
-										drawTempMenu();
+										//drawTempMenu();
 									}
 								if (highlighted == 2)
 									{
@@ -315,7 +389,7 @@ void setDisplayMode()
 									{
 										byte d = 'd';
 										enable(d);
-										drawTempMenu();
+										//drawTempMenu();
 									}
 							}
 						break;
@@ -415,7 +489,7 @@ void setDisplayMode()
 										byte t = 't';
 										enable(t);
 										drawTimerMenu();
-                    setAlarm();
+                    setTimeAlarm();
 										break;
 									}
 								}
@@ -523,6 +597,7 @@ void setDisplayMode()
 						if (switchSel == IS_FALLING)
 							{
 								displayMode = SETTINGS_MENU;
+                EEPROM.put(DefUpTemp_addr, defUpTemp);
 								drawSettingsMenu();
 								break;
 							}
@@ -541,6 +616,7 @@ void setDisplayMode()
 								tft.quickFill(BLACK);
 								//menuLevel = 1;
 								displayMode = SHOW_MENU;
+                EEPROM.put(DefUpTemp_addr, defUpTemp);
                 drawMenu();
 								break;
 							}
@@ -554,6 +630,7 @@ void setDisplayMode()
 						if (switchSel == IS_FALLING)
 							{
 								displayMode = SETTINGS_MENU;
+                EEPROM.put(DefDownTemp_addr, defDownTemp);
 								drawSettingsMenu();
 								break;
 							}
@@ -572,6 +649,7 @@ void setDisplayMode()
 								tft.quickFill(BLACK);
 								//menuLevel = 1;
 								displayMode = SHOW_MENU;
+                EEPROM.put(DefDownTemp_addr, defDownTemp);
                 drawMenu();
 								break;
 							}
@@ -714,11 +792,31 @@ void showDebug()
 	{
 		tft.setTextColor(BLUE, BLACK);
 		tft.setTextSize(1);
-		tft.setCursor(2, 118);
-		tft.print("Mode ");
-		tft.print(displayMode);
-		tft.print(" HL ");
-		tft.print(highlighted);
+		tft.setCursor(2, 110);
+		//tft.print("Mode ");
+		//tft.print(displayMode);
+    tft.print("Batt ");
+    float volts = gauge.getVoltage();
+    volts = volts/1000;
+    tft.print(volts);
+    tft.print(" SOC ");
+    float soc = gauge.getSOC();
+    tft.print(soc);
+    tft.print("%");
+    tft.setCursor(2, 118);
+    tft.print("TTE ");
+    float tte = gauge.getTTE();
+    tte = tte/3600;
+    tft.print(tte);
+    //tft.print(" TTF ");
+    //float ttf = gauge.getTTF();
+    //ttf = ttf/3600;
+    //tft.print(ttf);
+    //tft.print(" mA ");
+    //float mA = gauge.getCurrent();
+    //tft.print(mA);
+		//tft.print(" HL ");
+		//tft.print(highlighted);
     tft.print(" RAM ");
     tft.print(freeRam());
     tft.setTextSize(2);
@@ -730,6 +828,7 @@ int freeRam ()
     int v;
     return (int) &v - (__brkval == 0 ? (int) &__heap_start : (int) __brkval);
   } // freeRam
+
 
 void readNav(int max)
 	{
@@ -778,44 +877,86 @@ void toggleHighLight(int max)
 			}
 	}
 
-
 ///////////////////////////////////////////////////////////////////////////////
 void drawMain()
 	{
-		tft.drawLine(0, 60, 128, 60, DKBLUE);
-		tft.drawLine(80, 0, 80, 60, DKBLUE);
-		tft.drawLine(80, 30, 128, 30, DKBLUE);
+
+    tft.drawFastHLine(0, 60, 128, DKBLUE);
+		tft.drawFastVLine(80, 0, 60, DKBLUE);
+		tft.drawFastHLine(80, 30, 48, DKBLUE);
+    tft.drawFastHLine(0, 108, 128, DKBLUE);
 		tft.drawRect(0, 0, 128, 128, DKBLUE);
-		//Current temp:
-		//tft.setCursor(16, 17);
-		//tft.setTextSize(4);
-    tft.setCursor(13, 40);
-    tft.setFont(&FreeSans12pt7b);
-		tft.setTextColor(BLUE, BLACK);
-		tft.print("68");
-    tft.setFont();
-		tft.drawCircle(68, 20, 4, BLUE);
-		tft.drawCircle(68, 20, 3, BLUE);
+
+		tft.drawCircle(68, 20, 4, GREEN);
+		tft.drawCircle(68, 20, 3, GREEN);
 		//Up temp
 		tft.setCursor(92, 9);
 		tft.setTextSize(2);
-		tft.setTextColor(RED, BLACK);
-		tft.print("65");
-		tft.drawCircle(118, 11, 2, RED);
-		tft.drawCircle(118, 11, 1, RED);
+    if (upEnabled)
+      {
+        tft.drawCircle(118, 11, 2, RED);
+    		tft.drawCircle(118, 11, 1, RED);
+        tft.setTextColor(RED, BLACK);
+      }
+    else
+      {
+        tft.drawCircle(118, 11, 2, DKGREY);
+    		tft.drawCircle(118, 11, 1, DKGREY);
+        tft.setTextColor(DKGREY, BLACK);
+      }
+		tft.print(upTemp);
 		//down Temp
 		tft.setCursor(92, 38);
 		tft.setTextSize(2);
-		tft.setTextColor(DKGREY, BLACK);
-		tft.print("30");
-		tft.drawCircle(118, 40, 2, DKGREY);
-		tft.drawCircle(118, 40, 1, DKGREY);
+    if (downEnabled)
+      {
+        tft.drawCircle(118, 40, 2, RED);
+    		tft.drawCircle(118, 40, 1, RED);
+        tft.setTextColor(RED, BLACK);
+      }
+    else
+      {
+        tft.drawCircle(118, 40, 2, DKGREY);
+    		tft.drawCircle(118, 40, 1, DKGREY);
+        tft.setTextColor(DKGREY, BLACK);
+      }
+		tft.print(downTemp);
 	}
+
+///////////////////////////////////////////////////////////////////////////////
+void drawTemp()
+  {
+    byte i;
+    byte data[9];
+    unsigned long currentMillis = millis();
+
+    if (currentMillis - previousMillisTemp >= 150)
+      {
+        tft.setCursor(16, 17);
+        tft.setTextSize(4);
+    		tft.setTextColor(GREEN, BLACK);
+        oneWire.reset();
+        oneWire.select(tempSensor);
+        oneWire.write(0xBE);
+        for ( i = 0; i < 9; i++)
+          {           // we need 9 bytes
+             data[i] = oneWire.read();
+             //tft.print(data[i], HEX);
+             //tft.print(" ");
+           }
+        tempC = ( (data[1] << 8) | data[0] )*0.0625;
+        tft.print(tempC);
+        oneWire.reset();
+        oneWire.select(tempSensor);
+        oneWire.write(0x44);
+        previousMillisTemp = currentMillis;
+      }
+  }
 
 ///////////////////////////////////////////////////////////////////////////////
 void drawTime()
   {
-		tft.setCursor(18, 100);
+		tft.setCursor(40, 67);
 		tft.setTextSize(1);
     tft.setTextColor(BLUE, BLACK);
 		DateTime now = MCP7940.now();
@@ -827,14 +968,37 @@ void drawTime()
     tft.setTextSize(2);
     if (timerEnabled == true)
       {
-        tft.setCursor(18, 78);
-    		tft.setTextColor(RED, BLACK);
+        tft.setCursor(18, 82);
         uint8_t alarmType;
         DateTime alarmTime = MCP7940.getAlarm(0, alarmType);
-    		TimeSpan timeToGo = (alarmTime - now);
-    		sprintf(timeBuff,"%02d:%02d:%02d", timeToGo.hours(),
-         timeToGo.minutes(), timeToGo.seconds());
-    		tft.print(timeBuff);
+
+        int alSec = alarmTime.second();
+    		int alMin = alarmTime.minute();
+    		int alHr = alarmTime.hour();
+        int alSecs = alSec + (alMin * 60) + (alHr * 3600);
+        int nowSecs = sec + (min * 60) + (hr * 3600);
+        int timeToGo = alSecs - nowSecs;
+
+        int secsToGo = timeToGo % 60;
+        int minsToGo = (timeToGo % 3600) / 60;
+        int hrsToGo = timeToGo / 3600;
+        tft.setTextColor(RED, BLACK);
+
+        if (timeToGo <=0 && timeToGo % 2 == 0)
+          {
+            tft.fillRect(18, 82, 109, 14, BLACK);
+            return;
+          }
+
+    		sprintf(timeBuff,"%02d:%02d:%02d", abs(hrsToGo), abs(minsToGo),
+         abs(secsToGo));
+        tft.print(timeBuff);
+      }
+    else
+      {
+        tft.setCursor(18, 82);
+    		tft.setTextColor(DKGREY, BLACK);
+        tft.print("00:00:00");
       }
   }
 
@@ -1222,7 +1386,7 @@ void drawSettingsMenu()
 			}
 		else
 			{
-				tft.setCursor(112, 2);
+				tft.setCursor(112, 22);
 			}
 		tft.setTextColor(RED, BLACK);
 		tft.print(defUpTemp);
