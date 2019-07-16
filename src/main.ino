@@ -1,29 +1,5 @@
 #include <Arduino.h>
 
-/***************************************************
-   This is a example sketch demonstrating graphic drawing
-   capabilities of the SSD1351 library for the 1.5"
-   and 1.27" 16-bit Color OLEDs with SSD1351 driver chip
-
-   Pick one up today in the adafruit shop!
-   ------> http://www.adafruit.com/products/1431
-   ------> http://www.adafruit.com/products/1673
-
-   If you're using a 1.27" OLED, change SCREEN_HEIGHT to 96 instead of 128.
-
-   These displays use SPI to communicate, 4 or 5 pins are required to
-   interface
-   Adafruit invests time and resources providing this open source code,
-   please support Adafruit and open-source hardware by purchasing
-   products from Adafruit!
-
-   Written by Limor Fried/Ladyada for Adafruit Industries.
-   BSD license, all text above must be included in any redistribution
-
-   The Adafruit GFX Graphics core library is also required
-   https://github.com/adafruit/Adafruit-GFX-Library
-   Be sure to install it!
- ****************************************************/
 
 #define SCLK_PIN 13
 #define MOSI_PIN 11
@@ -163,6 +139,10 @@ void setup()
     }
     tft.fillScreen(BLACK);
     tft.setCursor(0, 0);
+    tft.println(F("Oscillator started..."));
+
+    tft.fillScreen(BLACK);
+    tft.setCursor(0, 0);
     tft.setTextSize(2);
   	// Enable interrupt (MAY NOT BE NEEDED)
   	//pinMode( PIN_INT, INPUT_PULLUP );
@@ -200,13 +180,12 @@ void setTimeAlarm()
   {
     DateTime now = MCP7940.now();
     now = now + TimeSpan(0, AlHr, AlMin, 0);
-    MCP7940.setAlarm(0, matchAll, now, true);
+    MCP7940.setAlarm(0, 7, now, true);
   }
 
 void alarm()
   {
     unsigned long currentMillis = millis();
-
     if (currentMillis - previousMillisAlarm > 500)
       {
         if (buzrState == LOW)
@@ -241,7 +220,7 @@ void stopAlarm()
         MCP7940.clearAlarm(0);
         timerEnabled = false;
         digitalWrite(BZR_PIN, LOW);
-        tft.fillRect(18, 82, 109, 14, BLACK);
+        tft.fillRect(18, 67, 109, 25, BLACK);
         drawMain();
       }
     if (tempC >= upTemp && upEnabled == true)
@@ -369,7 +348,6 @@ void setDisplayMode()
 									{
 										byte u = 'u';
 										enable(u);
-										//drawTempMenu();
 									}
 								if (highlighted == 2)
 									{
@@ -380,7 +358,6 @@ void setDisplayMode()
 									{
 										byte d = 'd';
 										enable(d);
-										//drawTempMenu();
 									}
 							}
 						break;
@@ -480,9 +457,7 @@ void setDisplayMode()
 									{
 										byte t = 't';
 										enable(t);
-										//drawTimerMenu();
-                    setTimeAlarm();
-										//break;
+										break;
 									}
 								}
 							break;
@@ -656,7 +631,7 @@ void showDebug()
 	{
 		tft.setTextColor(BLUE, BLACK);
 		tft.setTextSize(1);
-		tft.setCursor(2, 110);
+		tft.setCursor(5, 110);
 		//tft.print("Mode ");
 		//tft.print(displayMode);
     tft.print("Batt ");
@@ -667,21 +642,22 @@ void showDebug()
     float soc = gauge.getSOC();
     tft.print(soc);
     tft.print("%");
-    tft.setCursor(2, 118);
-    tft.print("TTE ");
-    float tte = gauge.getTTE();
-    tte = tte/3600;
-    tft.print(tte);
+    tft.setCursor(5, 118);
+    //tft.print("TTE ");
+    //float tte = gauge.getTTE();
+    //tte = tte/3600;
+    //tft.print(tte);
     //tft.print(" TTF ");
     //float ttf = gauge.getTTF();
     //ttf = ttf/3600;
     //tft.print(ttf);
     float cap = gauge.getCapacity();
-    tft.print(" Cap ");
+    cap = cap*2;
+    tft.print("Cap ");
     tft.print(cap);
-    //tft.print("mA ");
-    //float mA = gauge.getCurrent();
-    //tft.print(abs(mA));
+    tft.print(" mA ");
+    float mA = gauge.getCurrent();
+    tft.print(abs(mA));
     //tft.setCursor(50, 118);
 		//tft.print("HL ");
 		//tft.print(highlighted);
@@ -749,7 +725,7 @@ void toggleHighLight(int max)
 	}
 
 ///////////////////////////////////////////////////////////////////////////////
-// temp and Time displays
+// Temp and Time displays
 void drawTemp()
   {
     byte i;
@@ -771,31 +747,6 @@ void drawTemp()
     oneWire.reset();
     oneWire.select(tempSensor);
     oneWire.write(0x44);
-    /*
-    unsigned long currentMillis = millis();
-
-    if (currentMillis - previousMillisTemp >= 150)
-      {
-        tft.setCursor(16, 17);
-        tft.setTextSize(4);
-    		tft.setTextColor(GREEN, BLACK);
-        oneWire.reset();
-        oneWire.select(tempSensor);
-        oneWire.write(0xBE);
-        for ( i = 0; i < 9; i++)  // we need 9 bytes
-          {
-             data[i] = oneWire.read();
-             //tft.print(data[i], HEX);
-             //tft.print(" ");
-           }
-        tempC = ( (data[1] << 8) | data[0] )*0.0625;
-        tft.print(tempC);
-        oneWire.reset();
-        oneWire.select(tempSensor);
-        oneWire.write(0x44);
-        previousMillisTemp = currentMillis;
-      }
-      */
   }
 
 void drawTime()
@@ -804,31 +755,32 @@ void drawTime()
 		sec = now.second();
 		min = now.minute();
 		hr = now.hour();
-    /*
-    tft.setCursor(40, 67);
-		tft.setTextSize(1);
-    sprintf(timeBuff,"%02d:%02d:%02d", hr, min, sec);
-		tft.print(timeBuff);
-    */
+
     tft.setTextSize(2);
     if (timerEnabled == true)
       {
-        //tft.setCursor(18, 82);
-        tft.setCursor(18, 78);
         uint8_t alarmType;
         DateTime alarmTime = MCP7940.getAlarm(0, alarmType);
         int alSec = alarmTime.second();
     		int alMin = alarmTime.minute();
     		int alHr = alarmTime.hour();
+        // Draw finish time
+        tft.setCursor(43, 67);
+    		tft.setTextSize(1);
+        sprintf(timeBuff,"%02d:%02d:%02d", alHr, alMin, alSec);
+    		tft.print(timeBuff);
+        // Calculate time to go
         int alSecs = alSec + (alMin * 60) + (alHr * 3600);
         int nowSecs = sec + (min * 60) + (hr * 3600);
         int timeToGo = alSecs - nowSecs;
         int secsToGo = timeToGo % 60;
         int minsToGo = (timeToGo % 3600) / 60;
         int hrsToGo = timeToGo / 3600;
+        tft.setCursor(18, 78);
+        tft.setTextSize(2);
         tft.setTextColor(RED, BLACK);
         // Flash display
-        if (timeToGo <=0 && timeToGo % 2 == 0)
+        if (timeToGo % 2 == 0 && MCP7940.isAlarm(0))
           {
             tft.fillRect(18, 78, 109, 14, BLACK);
             return;
@@ -843,7 +795,13 @@ void drawTime()
     		tft.setTextColor(DKGREY, BLACK);
         tft.print("00:00:00");
       }
+      tft.setCursor(43, 95);
+      tft.setTextSize(1);
+      tft.setTextColor(BLUE, BLACK);
+      sprintf(timeBuff,"%02d:%02d:%02d", hr, min, sec);
+      tft.print(timeBuff);
   }
+
 
 ///////////////////////////////////////////////////////////////////////////////
 void drawMain()
@@ -853,7 +811,7 @@ void drawMain()
 		tft.drawFastVLine(80, 0, 60, DKBLUE);
 		tft.drawFastHLine(80, 30, 48, DKBLUE);
     tft.drawFastHLine(0, 108, 128, DKBLUE);
-		tft.drawRect(0, 0, 128, 128, DKBLUE);
+		tft.drawRoundRect(0, 0, 128, 128, 10, DKBLUE);
 
 		tft.drawCircle(68, 20, 4, GREEN);
 		tft.drawCircle(68, 20, 3, GREEN);
@@ -1057,14 +1015,12 @@ void incrTemp()
 					{
             tft.setCursor(100, 76);
 						downTemp += 5;
-						//tft.print(downTemp);
 					}
 				else if (downTemp < 9)
 					{
 						tft.fillRect(100, 76, 12, 16, BLACK);
 						tft.setCursor(112, 76);
 						downTemp += 5;
-						//tft.print(downTemp);
 					}
         tft.print(downTemp);
 			}
@@ -1087,14 +1043,12 @@ void decrTemp()
 				{
 					downTemp -= 5;
 					tft.setCursor(100, 76);
-					//tft.print(downTemp);
 				}
 			else if (downTemp >= 1)
 				{
 					tft.fillRect(100, 76, 12, 16, BLACK);
 					tft.setCursor(112, 76);
 					downTemp -= 5;
-					//tft.print(downTemp);
 				}
       tft.print(downTemp);
 		}
@@ -1232,7 +1186,6 @@ void decrTime()
 	{
 		if (highlighted == 0)	//decrement SET_HOUR
 			{
-				//tft.setTextColor(GREEN, RED);
 				if (AlHr >= 1)
 					{
 						tft.setCursor(100, 22);
@@ -1246,7 +1199,6 @@ void decrTime()
 			}
 		else if (highlighted == 1)
 			{
-				//tft.setTextColor(GREEN, RED);
 				if (AlMin >= 1)
 					{
 						tft.setCursor(100, 40);
@@ -1426,13 +1378,11 @@ void enable(byte mode)
 			{
 				if (upEnabled == true)
 					{
-						//tft.drawRoundRect(105, 40, 16, 16, 2, GREEN);
 						tft.fillRoundRect(106, 59, 14, 14, 2, BLACK);
 						upEnabled = false;
 					}
 				else
 					{
-						//tft.drawRoundRect(105, 40, 16, 16, 2, GREEN);
 						tft.fillRoundRect(106, 41, 14, 14, 2, RED);
 						upEnabled = true;
 					}
@@ -1442,13 +1392,11 @@ void enable(byte mode)
 			{
 				if (downEnabled == true)
 					{
-						//tft.drawRoundRect(105, 94, 16, 16, 2, GREEN);
 						tft.fillRoundRect(106, 95, 14, 14, 2, BLACK);
 						downEnabled = false;
 					}
 				else
 					{
-						//tft.drawRoundRect(105, 94, 16, 16, 2, GREEN);
 						tft.fillRoundRect(106, 95, 14, 14, 2, RED);
 						downEnabled = true;
 					}
@@ -1458,15 +1406,14 @@ void enable(byte mode)
 			{
 				if (timerEnabled == true)
 					{
-						//tft.drawRoundRect(105, 58, 16, 16, 2, GREEN);
 						tft.fillRoundRect(106, 59, 14, 14, 2, BLACK);
 						timerEnabled = false;
 					}
 				else
 					{
-						//tft.drawRoundRect(105, 58, 16, 16, 2, GREEN);
 						tft.fillRoundRect(106, 59, 14, 14, 2, RED);
 						timerEnabled = true;
+            setTimeAlarm();
 					}
 		   }
 	}
