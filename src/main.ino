@@ -30,7 +30,7 @@
 #define DKGREY					0x39E7
 
 #include <Adafruit_GFX.h>
-#include <Adafruit_SSD1351.h>
+#include <Adafruit_SSD1351.h> // OLED
 #include <SPI.h>
 #include <MCP7940.h>  // RTC
 #include <max1720x.h> // Batt Gauge
@@ -80,14 +80,13 @@ OneWire oneWire(3);
 byte tempSensor[] = {0x28, 0xA1, 0x2F, 0x9A, 0x07, 0x00, 0x00, 0x62};
 byte tempC;
 unsigned long previousMillis = 0;
-unsigned long previousMillisTemp = 0;
-unsigned long previousMillisAlarm = 0;
 byte buzrState = LOW;
 
 bool mainDisplayed = false;
 bool upEnabled = false;
 bool downEnabled = false;
 bool timerEnabled = false;
+bool milliSignal = false;
 
 byte AlMin = 0;
 byte AlHr = 0;
@@ -97,6 +96,16 @@ MainMenu mainMenu;
 TimeMenu timeMenu;
 TempMenu tempMenu;
 SettingsMenu settingsMenu;
+
+/*
+ * Sections of main.ino:
+ * Switches S/M   line112   Define SwitchStates for the four control buttons
+ * Navigation     line236   Control menu highlighting
+ * Alarms         line285   All alarm functions including colouring checkboxes
+ * Setup          line390
+ * loop           line443
+ * Display S/M    line474   Define DisplayModes and act on them
+ */
 
 ///////////////////////////////////////////////////////////////////////////////
 // Switches
@@ -279,28 +288,15 @@ void setTimeAlarm()
     DateTime now = MCP7940.now();
     now = now + TimeSpan(0, AlHr, AlMin, 0);
     MCP7940.setAlarm(0, 7, now, true);
-  }
+  }   // setTimeAlarm()
 
 void alarm()
   {
-    unsigned long currentMillis = millis();
-    if (currentMillis - previousMillisAlarm > 500)
+    if (milliSignal == true)
       {
-        if (buzrState == LOW)
-          {
-            buzrState = HIGH;
-            buzz();
-          }
-        else
-          buzrState = LOW;
-        previousMillisAlarm = currentMillis;
+        tone(BZR_PIN, 2030, 500);
       }
-  }
-
-void buzz()
-  {
-    tone(BZR_PIN, 2030, 500);
-  }
+    }   // alarm()
 
 void checkAlarms()
   {
@@ -324,7 +320,6 @@ void stopAlarm()
       {
         MCP7940.clearAlarm(0);
         timerEnabled = false;
-        //digitalWrite(BZR_PIN, LOW);
         noTone(BZR_PIN);
         tft.fillRect(18, 67, 109, 25, BLACK);
         display.drawMainDisplay(tft);
@@ -332,14 +327,12 @@ void stopAlarm()
     if (tempC >= upTemp && upEnabled == true)
       {
         upEnabled = false;
-        //digitalWrite(BZR_PIN, LOW);
         noTone(BZR_PIN);
         display.drawMainDisplay(tft);
       }
     if (tempC <= downTemp && downEnabled == true)
       {
         downEnabled = false;
-        //digitalWrite(BZR_PIN, LOW);
         noTone(BZR_PIN);
         display.drawMainDisplay(tft);
       }
@@ -404,9 +397,6 @@ void setup()
     pinMode(BZR_PIN, OUTPUT);
     digitalWrite(BZR_PIN, LOW);
 
-
-    //attachPCINT(DOWN_PIN, testDown, IS_FALLING);
-    //Wire.begin();
     tft.begin();
     tft.setRotation(2);
     tft.setTextColor(CYAN);
@@ -439,13 +429,6 @@ void setup()
     tft.fillScreen(BLACK);
     tft.setCursor(0, 0);
     tft.setTextSize(2);
-  	// Enable interrupt (MAY NOT BE NEEDED)
-  	//pinMode( PIN_INT, INPUT_PULLUP );
-    // FOLLOWING MAY NOT BE NEEDED......
-    //attachInterrupt( digitalPinToInterrupt(PIN_INT), alarmint, RISING );
-  	//enableInterrupt( PIN_INT, alarmint, CHANGE );
-    //attachPinChangeInterrupt(PIN_INT, alarm, RISING);
-    //attachPCINT(17, alarmint, CHANGE); //n.b. Serial must not be used with TX pin
     EEPROM.get(DefUpTemp_addr, defUpTemp);
     EEPROM.get(DefDownTemp_addr, defDownTemp);
     upTemp = defUpTemp;
@@ -459,6 +442,7 @@ void setup()
 ///////////////////////////////////////////////////////////////////////////////
 void loop()
   {
+    milliTimer();
     setDisplayMode();
 		menuSwitch();
 		selectSwitch();
@@ -471,7 +455,22 @@ void loop()
 	}  // loop()
 ///////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////
+// Milli Timer
+void milliTimer()
+  {
+    unsigned long currentMillis = millis();
+    if (currentMillis - previousMillis >= 500)
+      {
+        milliSignal = true;
+      }
+    else
+      {
+        milliSignal = false;
+      }
+    previousMillis = currentMillis;
+  } // milliTimer()
 
+///////////////////////////////////////////////////////////////////////////////
 // Display state machine
 void setDisplayMode()
 	{
@@ -484,13 +483,11 @@ void setDisplayMode()
 								display.drawMainDisplay(tft);
 								mainDisplayed = true;
 							}
-            unsigned long currentMillis = millis();
-            if (currentMillis - previousMillis >= 1000)
+            if (milliSignal == false)
               {
                 display.drawTemp(tft, oneWire, tempSensor, tempC);
     						display.drawTime(tft, MCP7940, timeBuff, timerEnabled);
                 display.drawInfo(tft, gauge);
-                previousMillis = currentMillis;
               }
     				// mode 0
             if (switchMenu == IS_FALLING)

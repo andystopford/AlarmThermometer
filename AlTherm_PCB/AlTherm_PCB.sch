@@ -1,6 +1,5 @@
 EESchema Schematic File Version 4
-LIBS:AlTherm_PCB-cache
-EELAYER 26 0
+EELAYER 30 0
 EELAYER END
 $Descr A4 11693 8268
 encoding utf-8
@@ -70,7 +69,7 @@ F 3 "" H 7250 1850 50  0001 C CNN
 	1    0    0    -1  
 $EndComp
 $Comp
-L MCU_Microchip_ATmega:ATmega328-PU U6
+L AlTherm_PCB-rescue:ATmega328-PU-MCU_Microchip_ATmega U6
 U 1 1 5C23F773
 P 8150 2600
 F 0 "U6" H 8650 4050 50  0000 R CNN
